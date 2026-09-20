@@ -11,7 +11,12 @@ if (!File.Exists(path))
     return 1;
 }
 
-ImportResult<ProductDto> result = ProductCsvImporter.Load(path);
+ImportResult<ProductDto> result = Path.GetExtension(path).ToLowerInvariant() switch
+{
+    ".csv" => ProductCsvImporter.Load(path),
+    ".json" => ProductJsonImporter.Load(path),
+    var ext => throw new NotSupportedException($"Непідтримуване розширення файлу: {ext}")
+};
 
 Console.WriteLine($"Завантажено записів: {result.Items.Count}");
 foreach (ProductDto p in result.Items.Take(5))
