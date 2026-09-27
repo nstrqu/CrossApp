@@ -84,3 +84,69 @@ Cli залишено на net8.0. Умовна компіляція (#if NET10\_
 
 .NET SDK 8.0.424 / 10.0.401, Windows 11 x64
 
+
+
+\## Доменна модель (лаба 4)
+
+
+
+\### Сутність Product (src/Core/Domain/Product.cs)
+
+Інваріанти:
+
+1\. Id, Sku, Name — не порожні (ArgumentException)
+
+2\. Початкова кількість не від'ємна (ArgumentOutOfRangeException)
+
+3\. Кількість приходу/видачі > 0 (ArgumentOutOfRangeException)
+
+4\. Видача не може перевищувати залишок (InvalidOperationException)
+
+5\. Дозволені переходи статусу товару перевіряються через switch (InvalidOperationException)
+
+
+
+Конструктор приватний, створення — лише через фабричний метод Create.
+
+Стан (\_quantity) інкапсульований, змінюється лише методами RegisterArrival/Issue.
+
+
+
+\### ProductStatus (src/Core/Domain/ProductStatus.cs) — додаткове завдання
+
+Enum станів товару (Active, OutOfStock, Discontinued). Метод ChangeStatus у Product
+
+перевіряє допустимі переходи через switch expression з кортеж-патерном.
+
+Discontinued — фінальний стан, з нього перейти нікуди не можна.
+
+
+
+\### Warehouse (src/Core/Domain/Warehouse.cs) — додаткове завдання
+
+Інваріант на дві сутності: клієнт не може отримати більше 3 видач (InvalidOperationException).
+
+Винесено в окремий клас, а не в Product, бо стосується взаємодії товару й клієнта —
+
+Product нічого не знає про клієнтів.
+
+
+
+\### ProductFactory (src/Core/Domain/ProductFactory.cs) — додаткове завдання
+
+Перетворює ImportResult<ProductDto> (лаба 3) у ImportResult<Product>, додатково
+
+перевіряючи доменні інваріанти при відновленні через FromDto — навіть якщо рядок
+
+пройшов CSV-парсинг, він все одно може порушувати бізнес-правила.
+
+
+
+\### DTO vs сутність
+
+ProductDto (лаба 3) — формат даних для передачі/зберігання, без правил.
+
+Product (лаба 4) — сутність з інкапсульованим станом і бізнес-правилами.
+
+Зв'язок через ToDto()/FromDto().
+
