@@ -149,4 +149,43 @@ ProductDto (лаба 3) — формат даних для передачі/зб
 Product (лаба 4) — сутність з інкапсульованим станом і бізнес-правилами.
 
 Зв'язок через ToDto()/FromDto().
+## Сервісний шар (лаба 5)
 
+### Інтерфейс ICatalogStore (src/Core/Abstractions/ICatalogStore.cs)
+Контракт сховища каталогу: List, GetById, Add, Update, Remove.
+CatalogService залежить лише від цього інтерфейсу, не від конкретної реалізації.
+
+### Реалізації (src/Core/Storage/)
+- InMemoryCatalogStore — зберігає дані в Dictionary в пам'яті, дані зникають після виходу з програми.
+- FileCatalogStore — кешує дані в пам'яті, довантажує з JSON-файлу при першому зверненні,
+  записує на диск (Flush) після кожної зміни. Формат файлу — список ProductDto.
+- CachingCatalogStore (додаткове завдання) — декоратор, обгортає будь-яке інше сховище
+  і кешує результат List(), скидаючи кеш при Add/Update/Remove.
+
+### CatalogService (src/Core/Services/CatalogService.cs)
+Бізнес-операції: Add (створення товару), Receive (прихід), All, Find(id), Find(predicate).
+Find(predicate) — додаткове завдання, пошук за довільною умовою через Func<Product, bool>,
+підготовка до LINQ-звітів тижнів 6-7.
+Залежність від ICatalogStore передається через конструктор (ручний Dependency Injection).
+
+### StoreFactory (src/Core/StoreFactory.cs) — додаткове завдання
+Виносить вибір і збірку конкретних реалізацій (InMemory/File + Caching) з Program.cs
+в окремий метод Create(args, dataPath).
+
+### Composition root (src/Cli/Program.cs)
+Єдине місце, де фактично визначається, які конкретні класи використовуються
+(через StoreFactory). Перемикання реалізації — аргументом командного рядка --file:
+
+dotnet run --project src/Cli            (InMemoryCatalogStore, дані не зберігаються)
+dotnet run --project src/Cli -- --file  (FileCatalogStore, дані зберігаються в data/catalog.json)
+
+Обидва варіанти додатково обгорнуті в CachingCatalogStore.
+
+### Схема залежностей
+Cli (Program.cs) → StoreFactory → CachingCatalogStore → InMemoryCatalogStore | FileCatalogStore
+Cli (Program.cs) → CatalogService → ICatalogStore (інтерфейс, конкретний тип невідомий сервісу)
+
+### Що зміниться на тижні 11 (БД)
+Коли сховищем стане база даних через Entity Framework Core, з'явиться нова реалізація
+ICatalogStore (наприклад EfCatalogStore). CatalogService і доменна модель Product
+не зміняться — зміниться лише вибір конкретного класу в StoreFactory/Program.cs.
