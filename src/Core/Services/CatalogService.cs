@@ -18,7 +18,7 @@ public sealed class CatalogService(ICatalogStore store)
     {
         var product = _store.GetById(id)
             ?? throw new InvalidOperationException($"Немає запису з id={id}.");
-        product.RegisterArrival(quantity); // метод сутності з тижня 4
+        product.RegisterArrival(quantity); // метод сутності
         _store.Update(product);
     }
 
@@ -26,7 +26,7 @@ public sealed class CatalogService(ICatalogStore store)
 
     public Product? Find(string id) => _store.GetById(id);
 
-    // Додаткове завдання: пошук за довільною умовою — підготовка до LINQ-звітів тижнів 6-7.
+    // Додаткове завдання: пошук за довільною умовою.
     public IReadOnlyList<Product> Find(Func<Product, bool> predicate) =>
         _store.List().Where(predicate).ToList();
 }
