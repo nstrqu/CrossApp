@@ -2,21 +2,54 @@
 using Core;
 using Core.Abstractions;
 using Core.Domain;
+using Core.Events;
 using Core.Reports;
 using Core.Services;
+using Cli.Notifications;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
 string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "catalog.json");
 ICatalogStore store = StoreFactory.Create(args, dataPath);
-var service = new CatalogService(store);
+var service = new CatalogService(store, new ConsoleSink());
 
 Console.WriteLine($"Сховище: {store.GetType().Name}");
 Console.WriteLine();
 
-// --- Крок 3: демонстрація відкладеного виконання ---
+// ===== Лабка 6: подія Changed, підписка/відписка =====
+var logPath = Path.Combine(AppContext.BaseDirectory, "logs", "app.log");
+Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
+
+void OnCatalogChanged(object? sender, CatalogChangedEventArgs e)
+{
+    var line = $"{e.At:HH:mm:ss} {e.Kind,-8} {e.Id} {e.Delta,4:+0;-0} → залишок {e.QuantityAfter}";
+    Console.WriteLine(line);
+    File.AppendAllText(logPath, line + Environment.NewLine);
+}
+
+service.Changed += OnCatalogChanged;
+
+int changes = 0;
+service.Changed += (_, _) => changes++;
+
+Console.WriteLine("=== Події: Add/Receive ===");
+var created = service.Add("SKU-101", "Кабель UTP cat6", "м", 50);
+service.Receive(created.Id, 25);
+Console.WriteLine($"Подій отримано: {changes}");
+
+service.Changed -= OnCatalogChanged;
+service.Receive(created.Id, 5); // тиха операція: лог/консоль-обробник мовчать, лямбда рахує далі
+Console.WriteLine($"Подій отримано: {changes}");
+
+Console.WriteLine();
+Console.WriteLine("=== Сценарій відмови ===");
+TryDo("Receive з неіснуючим id", () => service.Receive("NOPE-999", 10));
+TryDo("Receive з від'ємною кількістю", () => service.Receive(created.Id, -5));
+Console.WriteLine();
+
+// ===== Лабка 7: демо відкладеного виконання =====
 var source = service.All().ToList();
-var query = source.Where(p => p.Quantity < 10); // запит побудовано, не виконано
+var query = source.Where(p => p.Quantity < 10);
 
 Console.WriteLine("=== Демо відкладеного виконання ===");
 Console.WriteLine($"Дефіцитних до змін: {query.Count()}");
@@ -29,7 +62,7 @@ source.Clear();
 Console.WriteLine($"У знімку лишилось: {snapshot.Count}");
 Console.WriteLine();
 
-// --- Крок 4 + додаткові підкоманди ---
+// ===== Лабка 7: підкоманди звітів =====
 var items = service.All();
 var command = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "report-top";
 
@@ -58,7 +91,6 @@ switch (command)
         Console.WriteLine($"  позицій {t.Items}, всього {t.Total}, середнє {t.Average:F2}, макс {t.Max}");
         break;
     case "report-activity":
-        // демо-переміщення для GroupJoin (додаткове завдання 1)
         var movements = new List<StockMovement>
         {
             new("SD-01", +50, "Received"),
@@ -108,4 +140,17 @@ static void RunBenchmark()
                          .Count();
     sw.Stop();
     Console.WriteLine($"З ToList у середині: {sw.ElapsedMilliseconds} мс, знайдено {withToList}");
+}
+
+static void TryDo(string title, Action action)
+{
+    try
+    {
+        action();
+        Console.WriteLine($"  {title}: виняток НЕ спрацював!");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"  {title}: {ex.GetType().Name} — {ex.Message}");
+    }
 }
