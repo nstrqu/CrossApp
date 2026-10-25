@@ -1,0 +1,5 @@
+[
+  {"Id":"BAD-01","Sku":"BAD-001","Name":"Нормальний запис","Unit":"шт","Quantity":10},
+  {"Id":"BAD-02","Sku":"BAD-002","Name":"Ще один нормальний","Unit":"шт","Quantity":20},
+  {"Id":"BAD-03","Sku":"","Name":"Запис без SKU","Unit":"шт","Quantity":5}
+]

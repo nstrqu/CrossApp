@@ -213,3 +213,6 @@ ToList() у середині ланцюжка з'являється, коли п
 початкового source, а після source.Add(...) другий Count() перерахував запит заново і побачив доданий
 елемент — число змінилось. Після query.ToList() результат "заморожено" у звичайний список (snapshot), тому
 подальше source.Clear() на нього вже не впливає.
+Додаткові (лаба 8): потоковий імпорт (--stream, IAsyncEnumerable + [EnumeratorCancellation]),
+зв'язані токени (--linked-timeout-ms=N: таймаут відрізняється від скасування користувачем),
+IProgress<int> (відсотки в консолі), покриття: dotnet test --collect:"XPlat Code Coverage".

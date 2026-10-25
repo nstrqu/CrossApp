@@ -1,17 +1,23 @@
 ﻿using System.Diagnostics;
+using System.Text.Json;
+using Cli;
 using Core;
 using Core.Abstractions;
 using Core.Domain;
 using Core.Events;
 using Core.Reports;
 using Core.Services;
+using Core.Storage;
 using Cli.Notifications;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
 string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "catalog.json");
 ICatalogStore store = StoreFactory.Create(args, dataPath);
-var service = new CatalogService(store, new ConsoleSink());
+
+// --sink вмикає ConsoleSink (лабка 6, додаткове 1); без нього імпорт не засмічує консоль
+INotificationSink? sink = args.Contains("--sink") ? new ConsoleSink() : null;
+var service = new CatalogService(store, sink);
 
 Console.WriteLine($"Сховище: {store.GetType().Name}");
 Console.WriteLine();
@@ -45,6 +51,12 @@ Console.WriteLine();
 Console.WriteLine("=== Сценарій відмови ===");
 TryDo("Receive з неіснуючим id", () => service.Receive("NOPE-999", 10));
 TryDo("Receive з від'ємною кількістю", () => service.Receive(created.Id, -5));
+Console.WriteLine();
+
+// ===== Лабка 6, крок 7: Func замість події =====
+Console.WriteLine("=== FindAll: товари з кількістю < 10 (Func замість події) ===");
+foreach (var p in service.FindAll(p => p.Quantity < 10))
+    Console.WriteLine($"  {p.Id} {p.Sku,-10} {p.Name,-28} {p.Quantity,5} {p.Unit}");
 Console.WriteLine();
 
 // ===== Лабка 7: демо відкладеного виконання =====
@@ -109,6 +121,48 @@ switch (command)
         Console.WriteLine("report-top | report-low | report-groups | report-groups-query | report-top-groups | report-sum | report-activity | report-bench");
         break;
 }
+
+// ===== Лабка 8: асинхронний імпорт, скасування, доменні винятки =====
+Console.WriteLine();
+Console.WriteLine("=== Імпорт (async) ===");
+
+var importArg = args.FirstOrDefault(a => a.StartsWith("--import="));
+var importPath = importArg is null
+    ? Path.Combine("data", "supply.json")
+    : importArg.Substring("--import=".Length);
+
+using var cts = new CancellationTokenSource();
+Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+var timeoutArg = args.FirstOrDefault(a => a.StartsWith("--timeout-ms="));
+if (timeoutArg is not null && int.TryParse(timeoutArg.Substring("--timeout-ms=".Length), out var timeoutMs))
+    cts.CancelAfter(timeoutMs); // скасування за таймером (лише токен)
+
+var linkedArg = args.FirstOrDefault(a => a.StartsWith("--linked-timeout-ms="));
+int? linkedTimeoutMs = null;
+if (linkedArg is not null && int.TryParse(linkedArg.Substring("--linked-timeout-ms=".Length), out var lt))
+    linkedTimeoutMs = lt; // додаткове 2: зв'язані токени
+
+try
+{
+    var importer = new JsonCatalogImporter();
+    int added;
+
+    if (args.Contains("--stream")) // додаткове 1: потоковий імпорт
+        added = await service.ImportStreamAsync(importer, importPath, cts.Token);
+    else if (linkedTimeoutMs is not null)
+        added = await service.ImportWithTimeoutAsync(importer, importPath,
+            TimeSpan.FromMilliseconds(linkedTimeoutMs.Value), cts.Token);
+    else // додаткове 3: прогрес у відсотках
+        added = await service.ImportAsync(importer, importPath, cts.Token, new ConsoleProgress());
+
+    Console.WriteLine($"Імпортовано записів: {added}");
+}
+catch (OperationCanceledException) { Console.WriteLine("Імпорт скасовано."); }
+catch (TimeoutException ex) { Console.WriteLine($"Таймаут: {ex.Message}"); }
+catch (DomainException ex) { Console.WriteLine($"Дані відхилено: {ex.Message}"); }
+catch (FileNotFoundException) { Console.WriteLine($"Файл не знайдено: {importPath}"); }
+catch (JsonException ex) { Console.WriteLine($"Файл не є коректним JSON: {ex.Message}"); }
 
 static void Print(IReadOnlyList<StockLine> lines)
 {

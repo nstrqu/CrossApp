@@ -1,0 +1,19 @@
+[
+  {"Id":"SUP-01","Sku":"SUP-001","Name":"Цемент М500 25кг","Unit":"шт","Quantity":80},
+  {"Id":"SUP-02","Sku":"SUP-002","Name":"Щебінь фракція 5-20","Unit":"т","Quantity":30},
+  {"Id":"SUP-03","Sku":"SUP-003","Name":"Гіпсокартон 12.5мм","Unit":"шт","Quantity":120},
+  {"Id":"SUP-04","Sku":"SUP-004","Name":"Профіль CD 60","Unit":"м","Quantity":200},
+  {"Id":"SUP-05","Sku":"SUP-005","Name":"Профіль UD 27","Unit":"м","Quantity":150},
+  {"Id":"SUP-06","Sku":"SUP-006","Name":"Фарба акрилова 5л","Unit":"шт","Quantity":40},
+  {"Id":"SUP-07","Sku":"SUP-007","Name":"Лак паркетний","Unit":"л","Quantity":60},
+  {"Id":"SUP-08","Sku":"SUP-008","Name":"Ґрунтовка універсальна","Unit":"л","Quantity":90},
+  {"Id":"SUP-09","Sku":"SUP-009","Name":"Штукатурка гіпсова","Unit":"кг","Quantity":400},
+  {"Id":"SUP-10","Sku":"SUP-010","Name":"Клей монтажний","Unit":"кг","Quantity":120},
+  {"Id":"SUP-11","Sku":"SUP-011","Name":"Кабель ВВГнг 3x2.5","Unit":"м","Quantity":300},
+  {"Id":"SUP-12","Sku":"SUP-012","Name":"Розетка внутрішня","Unit":"шт","Quantity":250},
+  {"Id":"SUP-13","Sku":"SUP-013","Name":"Вимикач одноклавішний","Unit":"шт","Quantity":180},
+  {"Id":"SUP-14","Sku":"SUP-014","Name":"Труба поліпропіленова 20мм","Unit":"м","Quantity":220},
+  {"Id":"SUP-15","Sku":"SUP-015","Name":"Кутник поліпропіленовий","Unit":"шт","Quantity":500},
+  {"Id":"SUP-16","Sku":"SUP-016","Name":"Утеплювач пінополістирол","Unit":"шт","Quantity":70},
+  {"Id":"SUP-17","Sku":"SUP-017","Name":"Мастика бітумна","Unit":"кг","Quantity":55}
+]
