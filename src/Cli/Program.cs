@@ -1,168 +1,208 @@
 ﻿using System.Diagnostics;
+using System.Reflection;
 using System.Text.Json;
-using Cli;
 using Core;
 using Core.Abstractions;
+using Core.Configuration;
 using Core.Domain;
-using Core.Events;
 using Core.Reports;
-using Core.Services;
 using Core.Storage;
-using Cli.Notifications;
+using Microsoft.Extensions.Configuration;
 
 Console.OutputEncoding = System.Text.Encoding.UTF8;
 
-string dataPath = Path.Combine(AppContext.BaseDirectory, "data", "catalog.json");
-ICatalogStore store = StoreFactory.Create(args, dataPath);
+var envName = Environment.GetEnvironmentVariable("CROSSAPP_ENVIRONMENT") ?? "Development";
 
-// --sink вмикає ConsoleSink (лабка 6, додаткове 1); без нього імпорт не засмічує консоль
-INotificationSink? sink = args.Contains("--sink") ? new ConsoleSink() : null;
-var service = new CatalogService(store, sink);
-
-Console.WriteLine($"Сховище: {store.GetType().Name}");
-Console.WriteLine();
-
-// ===== Лабка 6: подія Changed, підписка/відписка =====
-var logPath = Path.Combine(AppContext.BaseDirectory, "logs", "app.log");
-Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-
-void OnCatalogChanged(object? sender, CatalogChangedEventArgs e)
+var switchMappings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
 {
-    var line = $"{e.At:HH:mm:ss} {e.Kind,-8} {e.Id} {e.Delta,4:+0;-0} → залишок {e.QuantityAfter}";
-    Console.WriteLine(line);
-    File.AppendAllText(logPath, line + Environment.NewLine);
+    { "--data-path", "Storage:DataPath" },
+    { "-d", "Storage:DataPath" },
+    { "--file-name", "Storage:FileName" },
+    { "-f", "Storage:FileName" },
+    { "--format", "Storage:Format" }
+};
+
+var config = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+    .AddJsonFile($"appsettings.{envName}.json", optional: true)
+    .AddUserSecrets(Assembly.GetExecutingAssembly(), optional: true)
+    .AddEnvironmentVariables(prefix: "CROSSAPP_")
+    .AddCommandLine(args, switchMappings)
+    .Build();
+
+var options = config.Get<AppOptions>() ?? new AppOptions();
+var legacy = Environment.GetEnvironmentVariable("CROSSAPP_DATA_PATH");
+
+// Аргумент командного рядка має найвищий пріоритет (перекриває файл і змінні середовища)
+bool hasCommandLineDataPath = args.Any(a =>
+    a.StartsWith("--data-path=", StringComparison.OrdinalIgnoreCase) ||
+    a.StartsWith("--Storage:DataPath=", StringComparison.OrdinalIgnoreCase) ||
+    a.Equals("--data-path", StringComparison.OrdinalIgnoreCase) ||
+    a.Equals("-d", StringComparison.OrdinalIgnoreCase));
+
+string effectiveDataPath = hasCommandLineDataPath
+    ? options.Storage.DataPath
+    : (!string.IsNullOrWhiteSpace(legacy) ? legacy : options.Storage.DataPath);
+
+var storage = new StorageOptions
+{
+    DataPath = effectiveDataPath,
+    FileName = options.Storage.FileName,
+    Format = options.Storage.Format
+};
+
+// Додаткове завдання 1: Валідація налаштувань на старті (код 2 без винятку)
+if (string.IsNullOrWhiteSpace(storage.DataPath))
+{
+    Console.Error.WriteLine("Помилка конфігурації: параметр Storage:DataPath не може бути порожнім.");
+    return 2;
 }
 
-service.Changed += OnCatalogChanged;
+bool isCsv = storage.Format.Equals("csv", StringComparison.OrdinalIgnoreCase);
+bool hasValidExtension = storage.FileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ||
+                         (isCsv && storage.FileName.EndsWith(".csv", StringComparison.OrdinalIgnoreCase));
 
-int changes = 0;
-service.Changed += (_, _) => changes++;
-
-Console.WriteLine("=== Події: Add/Receive ===");
-var created = service.Add("SKU-101", "Кабель UTP cat6", "м", 50);
-service.Receive(created.Id, 25);
-Console.WriteLine($"Подій отримано: {changes}");
-
-service.Changed -= OnCatalogChanged;
-service.Receive(created.Id, 5); // тиха операція: лог/консоль-обробник мовчать, лямбда рахує далі
-Console.WriteLine($"Подій отримано: {changes}");
-
-Console.WriteLine();
-Console.WriteLine("=== Сценарій відмови ===");
-TryDo("Receive з неіснуючим id", () => service.Receive("NOPE-999", 10));
-TryDo("Receive з від'ємною кількістю", () => service.Receive(created.Id, -5));
-Console.WriteLine();
-
-// ===== Лабка 6, крок 7: Func замість події =====
-Console.WriteLine("=== FindAll: товари з кількістю < 10 (Func замість події) ===");
-foreach (var p in service.FindAll(p => p.Quantity < 10))
-    Console.WriteLine($"  {p.Id} {p.Sku,-10} {p.Name,-28} {p.Quantity,5} {p.Unit}");
-Console.WriteLine();
-
-// ===== Лабка 7: демо відкладеного виконання =====
-var source = service.All().ToList();
-var query = source.Where(p => p.Quantity < 10);
-
-Console.WriteLine("=== Демо відкладеного виконання ===");
-Console.WriteLine($"Дефіцитних до змін: {query.Count()}");
-
-source.Add(Product.Create("tmp00001", "SKU-999", "Скоба", "шт", 3));
-Console.WriteLine($"Дефіцитних після змін: {query.Count()}");
-
-var snapshot = query.ToList();
-source.Clear();
-Console.WriteLine($"У знімку лишилось: {snapshot.Count}");
-Console.WriteLine();
-
-// ===== Лабка 7: підкоманди звітів =====
-var items = service.All();
-var command = args.FirstOrDefault(a => !a.StartsWith("--")) ?? "report-top";
-
-switch (command)
+if (string.IsNullOrWhiteSpace(storage.FileName) || !hasValidExtension)
 {
-    case "report-top":
-        Print(ReportService.TopByQuantity(items, 5));
-        break;
-    case "report-low":
-        Print(ReportService.LowStock(items, 10));
-        break;
-    case "report-groups":
-        foreach (var g in ReportService.ByUnit(items))
-            Console.WriteLine($"  {g.Key,-6} позицій: {g.Count,3} сумарно: {g.TotalQuantity,6}");
-        break;
-    case "report-groups-query":
-        foreach (var g in ReportService.ByUnitQuerySyntax(items))
-            Console.WriteLine($"  {g.Key,-6} позицій: {g.Count,3} сумарно: {g.TotalQuantity,6}");
-        break;
-    case "report-top-groups":
-        foreach (var g in ReportService.TopGroupsByQuantity(items, 3))
-            Console.WriteLine($"  {g.Key,-6} позицій: {g.Count,3} сумарно: {g.TotalQuantity,6}");
-        break;
-    case "report-sum":
-        var t = ReportService.Totals(items);
-        Console.WriteLine($"  позицій {t.Items}, всього {t.Total}, середнє {t.Average:F2}, макс {t.Max}");
-        break;
-    case "report-activity":
-        var movements = new List<StockMovement>
-        {
-            new("SD-01", +50, "Received"),
-            new("SD-01", -20, "Issued"),
-            new("SD-06", +10, "Received"),
-            new("SD-14", -5, "Issued"),
-            new("SD-14", -5, "Issued"),
-        };
-        foreach (var a in ReportService.WithMovements(items, movements))
-            Console.WriteLine($"  {a.Sku,-10} {a.Name,-22} рухів: {a.MovementsCount,3} сумарна зміна: {a.TotalDelta,5}");
-        break;
-    case "report-bench":
-        RunBenchmark();
-        break;
-    default:
-        Console.WriteLine("report-top | report-low | report-groups | report-groups-query | report-top-groups | report-sum | report-activity | report-bench");
-        break;
+    Console.Error.WriteLine("Помилка конфігурації: параметр Storage:FileName повинен містити розширення .json.");
+    return 2;
 }
-
-// ===== Лабка 8: асинхронний імпорт, скасування, доменні винятки =====
-Console.WriteLine();
-Console.WriteLine("=== Імпорт (async) ===");
-
-var importArg = args.FirstOrDefault(a => a.StartsWith("--import="));
-var importPath = importArg is null
-    ? Path.Combine("data", "supply.json")
-    : importArg.Substring("--import=".Length);
-
-using var cts = new CancellationTokenSource();
-Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-
-var timeoutArg = args.FirstOrDefault(a => a.StartsWith("--timeout-ms="));
-if (timeoutArg is not null && int.TryParse(timeoutArg.Substring("--timeout-ms=".Length), out var timeoutMs))
-    cts.CancelAfter(timeoutMs); // скасування за таймером (лише токен)
-
-var linkedArg = args.FirstOrDefault(a => a.StartsWith("--linked-timeout-ms="));
-int? linkedTimeoutMs = null;
-if (linkedArg is not null && int.TryParse(linkedArg.Substring("--linked-timeout-ms=".Length), out var lt))
-    linkedTimeoutMs = lt; // додаткове 2: зв'язані токени
 
 try
 {
-    var importer = new JsonCatalogImporter();
-    int added;
+    var fullPath = storage.ResolveFullPath(AppContext.BaseDirectory);
+    var apiKey = config["Integration:ApiKey"];
 
-    if (args.Contains("--stream")) // додаткове 1: потоковий імпорт
-        added = await service.ImportStreamAsync(importer, importPath, cts.Token);
-    else if (linkedTimeoutMs is not null)
-        added = await service.ImportWithTimeoutAsync(importer, importPath,
-            TimeSpan.FromMilliseconds(linkedTimeoutMs.Value), cts.Token);
-    else // додаткове 3: прогрес у відсотках
-        added = await service.ImportAsync(importer, importPath, cts.Token, new ConsoleProgress());
+    Console.WriteLine($"Файл даних : {fullPath}");
+    Console.WriteLine(apiKey is null ? "ApiKey: не заданий" : $"ApiKey: присутній, довжина {apiKey.Length}");
 
-    Console.WriteLine($"Імпортовано записів: {added}");
+    var command = args.FirstOrDefault(a => !a.StartsWith('-')) ?? "export";
+
+    var store = new FileCatalogStore(fullPath);
+
+    switch (command)
+    {
+        case "export":
+            if (store.List().Count == 0)
+            {
+                store.Add(Product.Create("a1b2c3d4", "A-100", "Цемент М400", "мішок", 40));
+                store.Add(Product.Create("b2c3d4e5", "A-200", "Пісок будівельний", "т", 15));
+                store.Add(Product.Create("c3d4e5f6", "A-300", "Цегла червона", "шт", 1200));
+            }
+
+            var items = store.List();
+            var exporter = CatalogExporterFactory.Create(storage.Format);
+            exporter.Export(fullPath, items);
+
+            int count = items.Count;
+            string countWord = (count % 10 == 1 && count % 100 != 11) ? "запис" :
+                               (count % 10 >= 2 && count % 10 <= 4 && (count % 100 < 10 || count % 100 >= 20)) ? "записи" : "записів";
+            Console.WriteLine($"Експортовано {count} {countWord}.");
+
+            string relativeDisplay = Path.GetRelativePath(AppContext.BaseDirectory, fullPath).Replace(Path.DirectorySeparatorChar, '/');
+            Console.WriteLine($"{relativeDisplay}:");
+            Console.WriteLine(File.ReadAllText(fullPath));
+            break;
+
+        case "import":
+            var importArg = args.FirstOrDefault(a => a.StartsWith("--import="));
+            var importPath = importArg is not null
+                ? importArg.Substring("--import=".Length)
+                : fullPath;
+
+            if (!File.Exists(importPath))
+            {
+                Console.WriteLine($"Файл для імпорту не знайдено: {importPath}");
+                return 1;
+            }
+
+            var importer = new JsonCatalogImporter();
+            var loaded = await importer.LoadAsync(importPath);
+            int added = 0;
+            foreach (var p in loaded)
+            {
+                if (store.GetById(p.Id) is null)
+                {
+                    store.Add(p);
+                    added++;
+                }
+            }
+            Console.WriteLine($"Імпортовано {added} записів.");
+            break;
+
+        case "report-top":
+            Print(ReportService.TopByQuantity(store.List(), 5));
+            break;
+
+        case "report-low":
+            Print(ReportService.LowStock(store.List(), 10));
+            break;
+
+        case "report-groups":
+            foreach (var g in ReportService.ByUnit(store.List()))
+                Console.WriteLine($"  {g.Key,-6} позицій: {g.Count,3} сумарно: {g.TotalQuantity,6}");
+            break;
+
+        case "report-groups-query":
+            foreach (var g in ReportService.ByUnitQuerySyntax(store.List()))
+                Console.WriteLine($"  {g.Key,-6} позицій: {g.Count,3} сумарно: {g.TotalQuantity,6}");
+            break;
+
+        case "report-top-groups":
+            foreach (var g in ReportService.TopGroupsByQuantity(store.List(), 3))
+                Console.WriteLine($"  {g.Key,-6} позицій: {g.Count,3} сумарно: {g.TotalQuantity,6}");
+            break;
+
+        case "report-sum":
+            var t = ReportService.Totals(store.List());
+            Console.WriteLine($"  позицій {t.Items}, всього {t.Total}, середнє {t.Average:F2}, макс {t.Max}");
+            break;
+
+        case "report-activity":
+            var movements = new List<StockMovement>
+            {
+                new("A-100", +50, "Received"),
+                new("A-100", -20, "Issued"),
+                new("A-200", +10, "Received"),
+                new("A-300", -5, "Issued"),
+            };
+            foreach (var a in ReportService.WithMovements(store.List(), movements))
+                Console.WriteLine($"  {a.Sku,-10} {a.Name,-22} рухів: {a.MovementsCount,3} сумарна зміна: {a.TotalDelta,5}");
+            break;
+
+        case "report-bench":
+            RunBenchmark();
+            break;
+
+        default:
+            Console.WriteLine($"Невідома команда: {command}");
+            Console.WriteLine("Доступні команди: export | import | report-top | report-low | report-groups | report-groups-query | report-top-groups | report-sum | report-activity | report-bench");
+            break;
+    }
 }
-catch (OperationCanceledException) { Console.WriteLine("Імпорт скасовано."); }
-catch (TimeoutException ex) { Console.WriteLine($"Таймаут: {ex.Message}"); }
-catch (DomainException ex) { Console.WriteLine($"Дані відхилено: {ex.Message}"); }
-catch (FileNotFoundException) { Console.WriteLine($"Файл не знайдено: {importPath}"); }
-catch (JsonException ex) { Console.WriteLine($"Файл не є коректним JSON: {ex.Message}"); }
+catch (InvalidOperationException ex)
+{
+    Console.Error.WriteLine($"Помилка: {ex.Message}");
+    return 1;
+}
+catch (DomainException ex)
+{
+    Console.Error.WriteLine($"Дані відхилено: {ex.Message}");
+    return 1;
+}
+catch (JsonException ex)
+{
+    Console.Error.WriteLine($"Помилка JSON: {ex.Message}");
+    return 1;
+}
+catch (Exception ex)
+{
+    Console.Error.WriteLine($"Непередбачена помилка: {ex.Message}");
+    return 1;
+}
+
+return 0;
 
 static void Print(IReadOnlyList<StockLine> lines)
 {
@@ -194,17 +234,4 @@ static void RunBenchmark()
                          .Count();
     sw.Stop();
     Console.WriteLine($"З ToList у середині: {sw.ElapsedMilliseconds} мс, знайдено {withToList}");
-}
-
-static void TryDo(string title, Action action)
-{
-    try
-    {
-        action();
-        Console.WriteLine($"  {title}: виняток НЕ спрацював!");
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"  {title}: {ex.GetType().Name} — {ex.Message}");
-    }
 }

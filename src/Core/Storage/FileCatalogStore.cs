@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using Core.Abstractions;
 using Core.Domain;
@@ -7,31 +8,59 @@ namespace Core.Storage;
 
 public sealed class FileCatalogStore(string path) : ICatalogStore
 {
-    private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions Options = new()
+    {
+        WriteIndented = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
     private readonly Dictionary<string, Product> _cache = new(StringComparer.OrdinalIgnoreCase);
-    private readonly string _path = Path.GetFullPath(path);
+    private readonly string _path = System.IO.Path.GetFullPath(path);
     private bool _loaded;
+
+    public string FilePath => _path;
 
     private void EnsureLoaded()
     {
         if (_loaded) return;
-        if (File.Exists(_path))
+        if (!File.Exists(_path))
         {
-            var dtos = JsonSerializer.Deserialize<List<ProductDto>>(File.ReadAllText(_path)) ?? [];
-            foreach (var dto in dtos)
-            {
-                var p = Product.FromDto(dto);
-                _cache[p.Id] = p;
-            }
+            _loaded = true;
+            return;
+        }
+
+        List<ProductDto> dtos;
+        try
+        {
+            dtos = JsonSerializer.Deserialize<List<ProductDto>>(
+                File.ReadAllText(_path), Options) ?? [];
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException($"Файл '{_path}' містить некоректний JSON: {ex.Message}", ex);
+        }
+
+        _cache.Clear();
+        foreach (var dto in dtos)
+        {
+            var p = Product.FromDto(dto); // повторно перевіряє інваріанти
+            _cache[p.Id] = p;
         }
         _loaded = true;
     }
 
     private void Flush()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        File.WriteAllText(_path,
-            JsonSerializer.Serialize(_cache.Values.Select(p => p.ToDto()).ToList(), Options));
+        var dtos = _cache.Values.Select(product => product.ToDto()).ToList();
+        var tmp = _path + ".tmp";
+        var dir = System.IO.Path.GetDirectoryName(_path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+        File.WriteAllText(tmp, JsonSerializer.Serialize(dtos, Options));
+        File.Move(tmp, _path, overwrite: true);
     }
 
     public IReadOnlyList<Product> List()
@@ -58,6 +87,7 @@ public sealed class FileCatalogStore(string path) : ICatalogStore
 
     public void Update(Product item)
     {
+        ArgumentNullException.ThrowIfNull(item);
         EnsureLoaded();
         _cache[item.Id] = item;
         Flush();

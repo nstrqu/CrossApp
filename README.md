@@ -216,3 +216,111 @@ ToList() у середині ланцюжка з'являється, коли п
 Додаткові (лаба 8): потоковий імпорт (--stream, IAsyncEnumerable + [EnumeratorCancellation]),
 зв'язані токени (--linked-timeout-ms=N: таймаут відрізняється від скасування користувачем),
 IProgress<int> (відсотки в консолі), покриття: dotnet test --collect:"XPlat Code Coverage".
+
+## Лабораторна робота 9 — Шляхи, JSON, конфігурація, Secrets
+
+### Мета
+Забезпечити кросплатформність застосунку: усунути абсолютні шляхи з коду, винести налаштування в ієрархічну конфігурацію (`appsettings.json`, змінні середовища, аргументи CLI), захистити чутливі дані за допомогою `user-secrets`, реалізувати імпорт та атомарний експорт колекції в JSON та CSV.
+
+### Профілі конфігурації
+- **Production (`appsettings.json`)**: базовий профіль за замовчуванням.
+  - `EnvironmentName`: `"Production"`
+  - `Logging:MinimumLevel`: `"Information"`
+  - `Storage:DataPath`: `"data"`
+  - `Storage:FileName`: `"items.json"`
+  - `Storage:Format`: `"json"`
+  - `Warehouse:DefaultUnit`: `"шт"`
+- **Development (`appsettings.Development.json`)**: профіль для локальної розробки (активується через `CROSSAPP_ENVIRONMENT=Development`).
+  - `EnvironmentName`: `"Development"`
+  - `Logging:MinimumLevel`: `"Debug"` (детальніше логування)
+
+### Порядок джерел конфігурації (хто кого перекриває)
+1. `appsettings.json` (базові налаштування)
+2. `appsettings.{Environment}.json` (перекриває базовий конфіг для середовища)
+3. `UserSecrets` (`secrets.json`, читається в середовищі розробки поза git)
+4. Змінні середовища з префіксом `CROSSAPP_` (наприклад, `CROSSAPP_Storage__DataPath`)
+5. Спрощена змінна середовища `CROSSAPP_DATA_PATH` (має вищий пріоритет над секцією Storage)
+6. Аргументи командного рядка CLI (`--data-path=...`, `--Storage:DataPath=...` — найвищий пріоритет)
+
+### Таблиця ключів конфігурації
+
+| Ключ конфігурації | Опис | Значення за замовчуванням | Змінна середовища (prefix `CROSSAPP_`) | Аргумент командного рядка |
+|---|---|---|---|---|
+| `EnvironmentName` | Назва середовища | `Development` / `Production` | `CROSSAPP_ENVIRONMENT` | `--EnvironmentName` |
+| `Logging:MinimumLevel` | Мінімальний рівень логування | `Information` (Prod) / `Debug` (Dev) | `CROSSAPP_Logging__MinimumLevel` | `--Logging:MinimumLevel` |
+| `Storage:DataPath` | Каталог для збереження даних | `data` | `CROSSAPP_Storage__DataPath` або `CROSSAPP_DATA_PATH` | `--data-path` / `-d` / `--Storage:DataPath` |
+| `Storage:FileName` | Ім'я файлу даних | `items.json` | `CROSSAPP_Storage__FileName` | `--file-name` / `-f` / `--Storage:FileName` |
+| `Storage:Format` | Формат експорту (`json` \| `csv`) | `json` | `CROSSAPP_Storage__Format` | `--format` / `--Storage:Format` |
+| `Warehouse:DefaultUnit` | Одиниця виміру за замовчуванням | `шт` | `CROSSAPP_Warehouse__DefaultUnit` | `--Warehouse:DefaultUnit` |
+| `Integration:ApiKey` | Секретний ключ інтеграції | читається з user-secrets | `CROSSAPP_Integration__ApiKey` | `--Integration:ApiKey` |
+
+### Приклади встановлення змінних середовища
+
+#### PowerShell (Windows):
+```powershell
+# Зміна каталогу даних
+$env:CROSSAPP_DATA_PATH = "C:\Users\student\custom_data"
+
+# Зміна формату експорту на CSV
+$env:CROSSAPP_Storage__Format = "csv"
+$env:CROSSAPP_Storage__FileName = "items.csv"
+
+# Перевизначення ApiKey через середовище
+$env:CROSSAPP_Integration__ApiKey = "my-secret-token"
+
+# Запуск
+dotnet run --project src/Cli -- export
+
+# Очищення змінних
+$env:CROSSAPP_DATA_PATH = ""
+$env:CROSSAPP_Storage__Format = ""
+$env:CROSSAPP_Storage__FileName = ""
+$env:CROSSAPP_Integration__ApiKey = ""
+```
+
+#### Bash (Linux / macOS):
+```bash
+# Зміна каталогу даних перед запуском
+CROSSAPP_DATA_PATH=/tmp/data dotnet run --project src/Cli -- export
+
+# Перевизначення ключа і запуск експорту в CSV
+CROSSAPP_Storage__Format=csv CROSSAPP_Storage__FileName=items.csv dotnet run --project src/Cli -- export
+
+# Змінна середовища для секрету
+export CROSSAPP_Integration__ApiKey=my-linux-secret
+dotnet run --project src/Cli -- export
+```
+
+### Секрети (User Secrets)
+Для захисту чутливих даних (паролі, токени, ключі API) від випадкового потрапляння в Git:
+- У проекті `Cli.csproj` додано ідентифікатор `<UserSecretsId>`.
+- Секрети зберігаються поза каталогом репозиторію у профілі користувача ОС:
+  - **Windows**: `%APPDATA%\Microsoft\UserSecrets\<UserSecretsId>\secrets.json`
+    (`C:\Users\<username>\AppData\Roaming\Microsoft\UserSecrets\<UserSecretsId>\secrets.json`)
+  - **Linux / macOS**: `~/.microsoft/usersecrets/<UserSecretsId>/secrets.json`
+- Керування через CLI:
+  ```bash
+  dotnet user-secrets init --project src/Cli
+  dotnet user-secrets set "Integration:ApiKey" "local-dev-key" --project src/Cli
+  dotnet user-secrets list --project src/Cli
+  ```
+- У коді читається через `config["Integration:ApiKey"]`. У консолі виводиться виключно факт наявності та довжина ключа.
+
+### Атомарний запис і робота з JSON
+- **Атомарний запис**: збереження виконується спочатку в тимчасовий файл `_path + ".tmp"`, після чого здійснюється атомарна заміна через `File.Move(tmp, _path, overwrite: true)`. Це гарантує цілісність даних у разі раптового збою живлення або аварійного завершення процесу.
+- **Підтримка кирилиці**: `Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping` запобігає зайвому екрануванню символів українського алфавіту у послідовності на кшталт `\u0426`.
+- **CamelCase**: `PropertyNamingPolicy = JsonNamingPolicy.CamelCase` автоматично транслює властивості в стандартний JSON camelCase (`id`, `sku`, `name`, `unit`, `quantity`).
+- **Стійкість до помилок**: при пошкодженні JSON користувач отримує чітке інформативне повідомлення без необробленого stack trace.
+
+### Реалізація додаткових завдань
+1. **Валідація налаштувань на старті**:
+   - При порожньому `Storage:DataPath` або `Storage:FileName` без `.json` (для JSON формату) застосунок виводить зрозуміле повідомлення про помилку та завершується з кодом повернення `2` без викидання винятків.
+2. **Аргумент `--data-path=...` через `AddCommandLine`**:
+   - Завдяки switch mappings аргументи командного рядка (`--data-path` / `-d`) перекривають як значення з файлу, так і змінну середовища `CROSSAPP_DATA_PATH`.
+3. **Формат експорту через `Storage:Format` ("json" | "csv") за спільним інтерфейсом**:
+   - Реалізовано інтерфейс `ICatalogExporter` та реалізації `JsonCatalogExporter` і `CsvCatalogExporter`.
+   - Вибір формату здійснюється фабрикою `CatalogExporterFactory` на основі конфігурації або параметра `--format=csv`.
+4. **Тест `FileCatalogStore` у тимчасовому каталозі**:
+   - Клас `FileCatalogStoreTests` створює унікальний каталог у `Path.GetTempPath()`.
+   - Тестує збереження, повторне завантаження через новий екземпляр сховища, атомарність запису, автостворення відсутніх підкаталогів.
+   - Повністю очищує тимчасовий каталог у методі `Dispose()`.

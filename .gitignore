@@ -482,3 +482,11 @@ $RECYCLE.BIN/
 
 # Vim temporary swap files
 *.swp
+
+# Lab 09: Runtime data, secrets, temp files
+**/data/items.json
+**/data/items.csv
+**/data/catalog.json
+*.tmp
+secrets.json
+
